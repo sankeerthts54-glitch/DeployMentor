@@ -2,14 +2,14 @@
 /**
  * Deploy Doctor — MCP Server Entry Point
  *
- * This is the main process that TrueForge connects to via stdio.
- * It registers all platform adapters and serves MCP tool calls.
- *
- * Started by TrueForge as: node dist/server.js (or: npx tsx src/server.ts)
+ * This is the main process that serves the MCP tools over HTTP/SSE.
+ * Started by: npm start (or: npx tsx src/server.ts)
  */
 
+import express from 'express';
+import cors from 'cors';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -22,13 +22,13 @@ import {
   getTool,
 } from './core/tool-registry.js';
 
-// ── Import all adapters ──────────────────────────────────
 import { RenderAdapter } from './adapters/render.js';
 import { HfSpacesAdapter } from './adapters/hf-spaces.js';
 import { VercelAdapter } from './adapters/vercel.js';
 import { GitHubPagesAdapter } from './adapters/github-pages.js';
 
-// ── Create MCP server ────────────────────────────────────
+const app = express();
+app.use(cors());
 
 const server = new Server(
   {
@@ -42,38 +42,13 @@ const server = new Server(
   },
 );
 
-// ── Register tools ───────────────────────────────────────
-
-// Shared tools (tier classifier, health checker)
+// Register tools
 registerSharedTools();
 
-// Platform adapters — each registers its own tools
-// Only register adapters whose env vars are present
-if (process.env.RENDER_API_KEY) {
-  registerAdapter(new RenderAdapter());
-} else {
-  console.error('[deploy-doctor] Skipping Render adapter (RENDER_API_KEY not set)');
-}
-
-if (process.env.HF_TOKEN) {
-  registerAdapter(new HfSpacesAdapter());
-} else {
-  console.error('[deploy-doctor] Skipping HF Spaces adapter (HF_TOKEN not set)');
-}
-
-if (process.env.VERCEL_TOKEN) {
-  registerAdapter(new VercelAdapter());
-} else {
-  console.error('[deploy-doctor] Skipping Vercel adapter (VERCEL_TOKEN not set)');
-}
-
-if (process.env.GITHUB_TOKEN) {
-  registerAdapter(new GitHubPagesAdapter());
-} else {
-  console.error('[deploy-doctor] Skipping GitHub Pages adapter (GITHUB_TOKEN not set)');
-}
-
-// ── Handle tools/list ────────────────────────────────────
+if (process.env.RENDER_API_KEY) registerAdapter(new RenderAdapter());
+if (process.env.HF_TOKEN) registerAdapter(new HfSpacesAdapter());
+if (process.env.VERCEL_TOKEN) registerAdapter(new VercelAdapter());
+if (process.env.GITHUB_TOKEN) registerAdapter(new GitHubPagesAdapter());
 
 server.setRequestHandler(ListToolsRequestSchema, async () => {
   const tools = getAllTools();
@@ -87,54 +62,48 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
   };
 });
 
-// ── Handle tools/call ────────────────────────────────────
-
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
   const tool = getTool(name);
 
   if (!tool) {
     return {
-      content: [
-        {
-          type: 'text' as const,
-          text: JSON.stringify({ error: `Unknown tool: ${name}` }),
-        },
-      ],
+      content: [{ type: 'text', text: JSON.stringify({ error: `Unknown tool: ${name}` }) }],
       isError: true,
     };
   }
 
   try {
     const result = await tool.handler(args ?? {});
-    return {
-      content: [{ type: 'text' as const, text: result }],
-    };
+    return { content: [{ type: 'text', text: result }] };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[deploy-doctor] Tool ${name} error:`, message);
     return {
-      content: [
-        {
-          type: 'text' as const,
-          text: JSON.stringify({ error: message }),
-        },
-      ],
+      content: [{ type: 'text', text: JSON.stringify({ error: message }) }],
       isError: true,
     };
   }
 });
 
-// ── Start server ─────────────────────────────────────────
+// SSE endpoint
+let transport: SSEServerTransport;
 
-async function main() {
-  const transport = new StdioServerTransport();
+app.get('/mcp', async (req, res) => {
+  transport = new SSEServerTransport('/mcp/message', res);
   await server.connect(transport);
-  console.error('[deploy-doctor] MCP server running on stdio');
-  console.error(`[deploy-doctor] ${getAllTools().length} tools registered`);
-}
+});
 
-main().catch((err) => {
-  console.error('[deploy-doctor] Fatal error:', err);
-  process.exit(1);
+app.post('/mcp/message', express.json(), async (req, res) => {
+  if (transport) {
+    await transport.handlePostMessage(req, res);
+  } else {
+    res.status(500).send('SSE not initialized');
+  }
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`[deploy-doctor] MCP server running on http://localhost:${PORT}/mcp`);
+  console.log(`[deploy-doctor] ${getAllTools().length} tools registered`);
 });
