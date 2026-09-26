@@ -1,0 +1,27 @@
+{
+  "name": "deploy-doctor",
+  "version": "1.0.0",
+  "description": "Deploy Doctor — a self-healing deployment failsafe agent for TrueForge",
+  "type": "module",
+  "main": "dist/server.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "dev": "tsx src/server.ts",
+    "lint": "tsc --noEmit"
+  },
+  "keywords": ["mcp", "trueforge", "deploy", "agent", "self-healing"],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "zod": "^3.25.67"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.8.0"
+  },
+  "engines": {
+    "node": ">=22.14.0"
+  }
+}
